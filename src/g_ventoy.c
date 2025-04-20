@@ -258,6 +258,7 @@ g_ventoy_kernel_dump(struct bio *bp)
 	    disk->d_consumer->provider->name);
 }
 
+#if __FreeBSD_version >= 1100000
 static void
 g_ventoy_done(struct bio *bp)
 {
@@ -278,6 +279,7 @@ g_ventoy_done(struct bio *bp)
 		mtx_unlock(&sc->sc_lock);
 	g_destroy_bio(bp);
 }
+#endif
 
 static void
 g_ventoy_flush(struct g_ventoy_softc *sc, struct bio *bp)
@@ -291,24 +293,45 @@ g_ventoy_flush(struct g_ventoy_softc *sc, struct bio *bp)
 	for (no = 0; no < sc->sc_ndisks; no++) {
 		cbp = g_clone_bio(bp);
 		if (cbp == NULL) {
+#if __FreeBSD_version >= 1100000
 			while ((cbp = bioq_takefirst(&queue)) != NULL)
 				g_destroy_bio(cbp);
+#else
+			for (cbp = bioq_first(&queue); cbp != NULL;
+			    cbp = bioq_first(&queue)) {
+				bioq_remove(&queue, cbp);
+				g_destroy_bio(cbp);
+			}
+#endif
 			if (bp->bio_error == 0)
 				bp->bio_error = ENOMEM;
 			g_io_deliver(bp, bp->bio_error);
 			return;
 		}
 		bioq_insert_tail(&queue, cbp);
+#if __FreeBSD_version >= 1100000
 		cbp->bio_done = g_ventoy_done;
+#else
+		cbp->bio_done = g_std_done;
+#endif
 		cbp->bio_caller1 = sc->sc_disks[no].d_consumer;
 		cbp->bio_to = sc->sc_disks[no].d_consumer->provider;
 	}
-	while ((cbp = bioq_takefirst(&queue)) != NULL) {
+#if __FreeBSD_version >= 1100000
+	while ((cbp = bioq_takefirst(&queue)) != NULL)
+#else
+	for (cbp = bioq_first(&queue); cbp != NULL; cbp = bioq_first(&queue)) {
+		bioq_remove(&queue, cbp);
+#endif
+	{
 		G_VENTOY_LOGREQ(cbp, "Sending request.");
 		cp = cbp->bio_caller1;
 		cbp->bio_caller1 = NULL;
 		g_io_request(cbp, cp);
 	}
+#if __FreeBSD_version < 1100000
+	}
+#endif
 }
 
 static void
@@ -357,9 +380,11 @@ g_ventoy_start(struct bio *bp)
 
 	offset = bp->bio_offset;
 	length = bp->bio_length;
+#if __FreeBSD_version >= 1100000
 	if ((bp->bio_flags & BIO_UNMAPPED) != 0)
 		addr = NULL;
 	else
+#endif
 		addr = bp->bio_data;
 	end = offset + length;
 
@@ -378,8 +403,16 @@ g_ventoy_start(struct bio *bp)
 
 		cbp = g_clone_bio(bp);
 		if (cbp == NULL) {
+#if __FreeBSD_version >= 1100000
 			while ((cbp = bioq_takefirst(&queue)) != NULL)
 				g_destroy_bio(cbp);
+#else
+			for (cbp = bioq_first(&queue); cbp != NULL;
+				cbp = bioq_first(&queue)) {
+				bioq_remove(&queue, cbp);
+				g_destroy_bio(cbp);
+			}
+#endif
 			if (bp->bio_error == 0)
 				bp->bio_error = ENOMEM;
 			g_io_deliver(bp, bp->bio_error);
@@ -389,6 +422,7 @@ g_ventoy_start(struct bio *bp)
 		/*
 		 * Fill in the component buf structure.
 		 */
+#if __FreeBSD_version >= 1100000
 		if (len == bp->bio_length)
 			cbp->bio_done = g_std_done;
 		else
@@ -406,6 +440,15 @@ g_ventoy_start(struct bio *bp)
 		addr += len;
 		cbp->bio_to = disk->d_consumer->provider;
 		cbp->bio_caller1 = disk;
+#else
+		cbp->bio_done = g_std_done;
+		cbp->bio_offset = off + disk->d_map_start;		
+		cbp->bio_data = addr;
+		addr += len;
+		cbp->bio_length = len;
+		cbp->bio_to = disk->d_consumer->provider;
+		cbp->bio_caller1 = disk;
+#endif
 
 		if (length == 0)
 			break;
@@ -413,12 +456,21 @@ g_ventoy_start(struct bio *bp)
 	KASSERT(length == 0,
 	    ("Length is still greater than 0 (class=%s, name=%s).",
 	    bp->bio_to->geom->class->name, bp->bio_to->geom->name));
-	while ((cbp = bioq_takefirst(&queue)) != NULL) {
+#if __FreeBSD_version >= 1100000
+	while ((cbp = bioq_takefirst(&queue)) != NULL)
+#else
+	for (cbp = bioq_first(&queue); cbp != NULL; cbp = bioq_first(&queue)) {
+		bioq_remove(&queue, cbp);
+#endif
+	{
 		G_VENTOY_LOGREQ(cbp, "Sending request.");
 		disk = cbp->bio_caller1;
 		cbp->bio_caller1 = NULL;
 		g_io_request(cbp, disk->d_consumer);
 	}
+#if __FreeBSD_version < 1100000
+	}
+#endif
 }
 
 static void
@@ -434,8 +486,10 @@ g_ventoy_check_and_run(struct g_ventoy_softc *sc)
 		return;
 
 	pp = g_new_providerf(sc->sc_geom, "ventoy/%s", sc->sc_name);
+#if __FreeBSD_version >= 1100000
 	pp->flags |= G_PF_DIRECT_SEND | G_PF_DIRECT_RECEIVE |
 	    G_PF_ACCEPT_UNMAPPED;
+#endif
 	start = 0;
 	for (no = 0; no < sc->sc_ndisks; no++) {
 		disk = &sc->sc_disks[no];
@@ -450,12 +504,14 @@ g_ventoy_check_and_run(struct g_ventoy_softc *sc)
 		else
 			sectorsize = lcm(sectorsize, dp->sectorsize);
 
+#if __FreeBSD_version >= 1100000
 		/* A provider underneath us doesn't support unmapped */
 		if ((dp->flags & G_PF_ACCEPT_UNMAPPED) == 0) {
 			G_VENTOY_DEBUG(1, "Cancelling unmapped "
 			    "because of %s.", dp->name);
 			pp->flags &= ~G_PF_ACCEPT_UNMAPPED;
 		}
+#endif
 	}
 	pp->sectorsize = sectorsize;
 	/* We have sc->sc_disks[sc->sc_ndisks - 1].d_end in 'start'. */
@@ -521,7 +577,9 @@ g_ventoy_add_disk(struct g_ventoy_softc *sc, struct g_provider *pp, u_int no)
 	fcp = LIST_FIRST(&gp->consumer);
 
 	cp = g_new_consumer(gp);
+#if __FreeBSD_version >= 1100000
 	cp->flags |= G_CF_DIRECT_SEND | G_CF_DIRECT_RECEIVE;
+#endif
 	error = g_attach(cp, pp);
 	if (error != 0) {
 		g_destroy_consumer(cp);
@@ -614,7 +672,9 @@ g_ventoy_create(struct g_class *mp, const struct g_ventoy_metadata *md,
 	for (no = 0; no < sc->sc_ndisks; no++)
 		sc->sc_disks[no].d_consumer = NULL;
 	sc->sc_type = type;
+#if __FreeBSD_version >= 1100000
 	mtx_init(&sc->sc_lock, "gventoy lock", NULL, MTX_DEF);
+#endif
 
 	gp->softc = sc;
 	sc->sc_geom = gp;
@@ -663,7 +723,9 @@ g_ventoy_destroy(struct g_ventoy_softc *sc, boolean_t force)
 	KASSERT(sc->sc_provider == NULL, ("Provider still exists? (device=%s)",
 	    gp->name));
 	free(sc->sc_disks, M_VENTOY);
+#if __FreeBSD_version >= 1100000
 	mtx_destroy(&sc->sc_lock);
+#endif
 	free(sc, M_VENTOY);
 
 	G_VENTOY_DEBUG(0, "Device %s destroyed.", gp->name);

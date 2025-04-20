@@ -149,10 +149,16 @@ g_ventoy_remove_disk(struct g_ventoy_disk *disk)
 	}
 
 	if (sc->sc_provider != NULL) {
+#if __FreeBSD_version < 1200000
 		sc->sc_provider->flags |= G_PF_WITHER;
+#endif
 		G_VENTOY_DEBUG(0, "Device %s deactivated.",
 		    sc->sc_provider->name);
+#if __FreeBSD_version >= 1200000
+		g_wither_provider(sc->sc_provider, ENXIO);
+#else
 		g_orphan_provider(sc->sc_provider, ENXIO);
+#endif
 		sc->sc_provider = NULL;
 	}
 
@@ -1079,3 +1085,4 @@ g_ventoy_dumpconf(struct sbuf *sb, const char *indent, struct g_geom *gp,
 }
 
 DECLARE_GEOM_CLASS(g_ventoy_class, g_ventoy);
+//MODULE_VERSION(geom_ventoy, 0);

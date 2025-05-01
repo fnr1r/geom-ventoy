@@ -1047,10 +1047,17 @@ g_ventoy_taste(struct g_class *mp, struct g_provider *pp, int flags __unused)
         g_disk_map_end = 0;
     }
 
+#if __FreeBSD_version >= 1300000
+    if (alias && sc && sc->sc_provider)
+    {
+        g_provider_add_alias(sc->sc_provider, "%s", alias);
+    }
+#else
     if (alias)
     {
         g_geom_add_alias(gp, alias);
     }
+#endif
 
     return (gp);
 }

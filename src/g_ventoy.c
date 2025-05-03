@@ -1052,7 +1052,7 @@ g_ventoy_taste(struct g_class *mp, struct g_provider *pp, int flags __unused)
     {
         g_provider_add_alias(sc->sc_provider, "%s", alias);
     }
-#else
+#elif __FreeBSD_version >= 1200000
     if (alias)
     {
         g_geom_add_alias(gp, alias);
